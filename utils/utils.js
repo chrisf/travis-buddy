@@ -57,21 +57,30 @@ module.exports.getData = async (payload, params) => ({
   pullRequest: payload.pull_request_number,
   pullRequestTitle: payload.pull_request_title,
   buildNumber: payload.id,
+  author: payload.author_name,
+  state: payload.state,
+  branch: payload.branch,
+  travisType: payload.type,
+  language: payload.config.language,
+  scripts: payload.config.script,
+
   jobs: payload.matrix
     .filter(job => job.state === 'failed')
     .map((job, index) => module.exports.createJobObject(job, index)),
-  author: payload.author_name,
+
+  comments:
+    (await module.exports.getAllComments(
+      payload.repository.owner_name,
+      payload.repository.name,
+      payload.pull_request_number,
+    )) || [],
+
   pullRequestAuthor:
     (await module.exports.getPullRequestAuthor(
       payload.repository.owner_name,
       payload.repository.name,
       payload.pull_request_number,
     )) || payload.author_name,
-  state: payload.state,
-  branch: payload.branch,
-  travisType: payload.type,
-  language: payload.config.language,
-  scripts: payload.config.script,
 });
 
 module.exports.getPullRequestAuthor = async (owner, repo, pullRequestNumber) =>
@@ -165,16 +174,12 @@ module.exports.createComment = async (
   pullRequestNumber,
   contents,
   insertMode,
+  comments,
 ) => {
   const gh = module.exports.getGithubApi();
   const issues = gh.getIssues(owner, repo);
 
   if (insertMode === 'update') {
-    const comments = await module.exports.getAllComments(
-      owner,
-      repo,
-      pullRequestNumber,
-    );
     const travisBuddysComment = comments.find(
       comment => comment.user.login === module.exports.getUserName(),
     );
@@ -198,11 +203,13 @@ module.exports.createComment = async (
 module.exports.getUserName = () =>
   process.env.GITHUB_USERNAME || 'Chomusuke12345';
 
+module.exports.isTest = () => !process.env.GITHUB_USERNAME;
+
 module.exports.getAllComments = async (owner, repo, pullRequestNumber) => {
   const gh = module.exports.getGithubApi();
+  const issues = gh.getIssues(owner, repo);
   const comments = [];
   let page = 1;
-  const issues = gh.getIssues(owner, repo);
   let bulk;
 
   do {
@@ -212,6 +219,8 @@ module.exports.getAllComments = async (owner, repo, pullRequestNumber) => {
 
     comments.push(...bulk.data);
 
+    if (module.exports.isTest()) return comments;
+
     page += 1;
   } while (bulk.data.length > 0);
 
@@ -219,3 +228,15 @@ module.exports.getAllComments = async (owner, repo, pullRequestNumber) => {
 };
 
 module.exports.wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+module.exports.getStopComment = async comments => {
+  const stopComment = comments.find(comment =>
+    comment.body
+      .toLowerCase()
+      .includes(`@${module.exports.getUserName()} Stop`.toLowerCase()),
+  );
+
+  if (stopComment) return stopComment;
+
+  return false;
+};
